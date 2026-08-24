@@ -141,6 +141,8 @@ print(sens.ranks)          # rank of every target under each parameter setting
 print(sens.correlations)   # pairwise Spearman agreement between settings
 ```
 
+`sensitivity` is also importable directly: `from scalepert.pipeline import sensitivity`.
+
 ## Reproducing the manuscript analyses
 
 The manuscript's quantitative results were produced with the research codebase used for the publication; this repository provides the reusable method implementation. To reproduce the three analytical layers:

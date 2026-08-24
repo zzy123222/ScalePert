@@ -11,7 +11,7 @@ from .programs import (
 from .preprocessing import prepare_adata, score_programs
 from .cell import scalepert_cell, displacement_vectors
 from .tissue import build_communication_graph, propagate_tissue
-from .pipeline import ScalePertPipeline
+from .pipeline import ScalePertPipeline, sensitivity
 
 __version__ = "1.0.0"
 __all__ = [
@@ -30,4 +30,5 @@ __all__ = [
     "build_communication_graph",
     "propagate_tissue",
     "ScalePertPipeline",
+    "sensitivity",
 ]

@@ -5,8 +5,8 @@
 - `src/scalepert/` — package source (Cell and Tissue modules, pipeline)
 - `tests/` — pytest suite covering displacement math, sign conventions, propagation
 - `examples/` — runnable end-to-end scripts
-- `scripts/build_example.py` — regenerates `data/scalepert_example.h5ad`
-- `data/` — bundled example atlas
+- `scripts/build_example.py` — regenerates `src/scalepert/data_store/scalepert_example.h5ad`
+- `src/scalepert/data_store/` — bundled example atlas
 
 ## Local workflow
 
@@ -20,7 +20,7 @@ python examples/run_pipeline.py
 To rebuild the example dataset:
 
 ```bash
-python scripts/build_example.py data/scalepert_example.h5ad
+python scripts/build_example.py
 ```
 
 ## Conventions
