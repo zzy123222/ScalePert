@@ -149,8 +149,11 @@ def test_tissue_propagation_matches_direct_signal(example_adata):
     merged = out.summary.set_index("target")
     tissue_cols = ["tissue_" + c[:-3] for c in direct.columns]
     tissue_cols = [c for c in tissue_cols if c in merged.columns]
-    corr = np.corrcoef(direct.mean(axis=0).values[: len(tissue_cols)], merged[tissue_cols].values[0])[0, 1]
-    assert corr > 0.9
+    for target in direct.index:
+        d = np.asarray(direct.loc[target].values, dtype=float)
+        m = np.asarray(merged.loc[target, tissue_cols].values, dtype=float)
+        corr = np.corrcoef(d, m)[0, 1]
+        assert corr > 0.9
     assert (out.summary["suppression_score"] >= 0).all()
 
 
