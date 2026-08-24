@@ -100,9 +100,25 @@ def program_shifts(
         w1 = wasserstein_distance(s[moved], after[moved])
         direction = np.sign(after[moved].mean() - s[moved].mean())
         shifts[m] = float(direction * w1)
-    result = dict(shifts)
-    result["n_cells"] = result.get("n_cells", result.get("n_cells"))
     return shifts
+
+
+def _combine_displacements(results):
+    base = results[0]
+    avg_shift = np.mean([r["shift_vectors"] for r in results], axis=0)
+    return {
+        "target": "+".join(r["target"] for r in results),
+        "gene": "+".join(r["gene"] for r in results),
+        "cell_type": base["cell_type"],
+        "cell_indices": base["cell_indices"],
+        "pca_before": base["pca_before"],
+        "pca_after": base["pca_before"] + avg_shift,
+        "shift_vectors": avg_shift,
+        "expression": base["expression"],
+        "n_cells": base["n_cells"],
+        "n_eligible": sum(r["n_eligible"] for r in results),
+        "obs": base["obs"],
+    }
 
 
 def scalepert_cell(
@@ -127,13 +143,10 @@ def scalepert_cell(
         obs_programs = [m for m in resolve_programs(adata.var_names) if m in adata.obs.columns]
         programs = {m: [] for m in obs_programs} if obs_programs else resolve_programs(adata.var_names)
     rows = []
-    results_store = {}
 
-    def run_one(gene_set, label, kind, weight=None):
+    def evaluate(gene_set, label, kind):
         for ct in cell_types:
-            per_gene_shifts = []
-            eligible_flags = []
-            n_cells_ct = None
+            displacements = []
             for g in gene_set:
                 r = displacement_vectors(
                     adata,
@@ -141,36 +154,36 @@ def scalepert_cell(
                     ct,
                     cell_type_key=cell_type_key,
                     k=k,
-                    scale=weight if weight is not None else scale,
+                    scale=scale / len(gene_set),
                     min_cells=min_cells,
                     pca_key=pca_key,
                 )
                 if r is not None:
-                    n_cells_ct = r["n_cells"]
-                sh = program_shifts(adata, r, programs=programs)
-                if sh is not None and all(np.isfinite(v) for v in sh.values()):
-                    per_gene_shifts.append(sh)
-                    eligible_flags.append(True)
-                else:
-                    eligible_flags.append(False)
-            if not per_gene_shifts:
+                    displacements.append(r)
+            if not displacements:
                 continue
-            keys = list(per_gene_shifts[0].keys())
-            combined = {kk: float(np.mean([sh[kk] for sh in per_gene_shifts])) for kk in keys}
+            combined = (
+                displacements[0]
+                if len(displacements) == 1
+                else _combine_displacements(displacements)
+            )
+            sh = program_shifts(adata, combined, programs=programs)
+            if sh is None or not all(np.isfinite(v) for v in sh.values()):
+                continue
             row = {
                 "target": label,
                 "type": kind,
                 "cell_type": ct,
                 "n_genes": len(gene_set),
                 "program": "+".join(sorted({HUB_PROGRAM.get(g, "?") for g in gene_set})),
-                "n_cells": n_cells_ct,
-                "eligible_targets": sum(eligible_flags),
+                "n_cells": combined["n_cells"],
+                "eligible_targets": len(displacements),
             }
             for m in programs:
-                row[f"{m}_W1"] = combined.get(m, np.nan)
-            row["mean_signed_W1"] = float(np.mean(list(combined.values())))
-            neg = [v for v in combined.values() if v < 0]
-            pos = [v for v in combined.values() if v > 0]
+                row[f"{m}_W1"] = sh.get(m, np.nan)
+            row["mean_signed_W1"] = float(np.mean(list(sh.values())))
+            neg = [v for v in sh.values() if v < 0]
+            pos = [v for v in sh.values() if v > 0]
             row["reversal_score"] = float(sum(-v for v in neg))
             row["upshift_score"] = float(sum(pos))
             rows.append(row)
@@ -178,13 +191,13 @@ def scalepert_cell(
     for t in targets:
         if progress:
             print(f"[ScalePert-Cell] {t}")
-        run_one([t], t, "single")
+        evaluate([t], t, "single")
     if combos:
         for combo in combos:
             label = "+".join(combo)
             if progress:
                 print(f"[ScalePert-Cell] combo {label}")
-            run_one(list(combo), label, "combo", weight=scale / max(len(combo), 1))
+            evaluate(list(combo), label, "combo")
 
     df = pd.DataFrame(rows)
     if len(df) == 0:
@@ -192,7 +205,7 @@ def scalepert_cell(
             "no eligible perturbations produced; check that targets are expressed "
             "and populations contain at least min_cells cells"
         )
-    single = df[df["type"] == "single"].copy()
+    single = df[df["type"] == "single"]
     if len(single) > 0:
         rank_values = single.groupby("target")["mean_signed_W1"].mean().sort_values()
         df["rank"] = df["target"].map({t: i + 1 for i, t in enumerate(rank_values.index)})
@@ -209,10 +222,10 @@ class CellResult:
     def __repr__(self):
         return f"CellResult(perturbations={len(self.table)})"
 
-    def ranking(self, score="mean_signed_W1", ascending=True):
-        single = self.table[self.table["type"] == "single"]
+    def ranking(self, score="mean_signed_W1", ascending=True, types=("single",)):
+        sub = self.table[self.table["type"].isin(types)] if types else self.table
         agg = (
-            single.groupby("target")[score]
+            sub.groupby("target")[score]
             .mean()
             .sort_values(ascending=ascending)
             .reset_index()
@@ -220,7 +233,7 @@ class CellResult:
         agg.insert(0, "rank", np.arange(1, len(agg) + 1))
         return agg
 
-    def tissue_summary(self, score="mean_signed_W1", ascending=True):
+    def population_summary(self, score="mean_signed_W1", ascending=True):
         sub = self.table[self.table["type"] == "single"]
         out = (
             sub.groupby("target")[score]
@@ -228,5 +241,12 @@ class CellResult:
             .sort_values("mean", ascending=ascending)
             .reset_index()
         )
-        out.columns = ["target", "mean_score", "median_score", "min_score", "max_score", "n_populations"]
+        out.columns = [
+            "target",
+            "mean_score",
+            "median_score",
+            "min_score",
+            "max_score",
+            "n_populations",
+        ]
         return out

@@ -4,6 +4,8 @@ import pytest
 import anndata as ad
 
 from scalepert import (
+    DEFAULT_TARGETS,
+    LR_PAIRS,
     PROGRAM_NAMES,
     PROGRAMS,
     ScalePertPipeline,
@@ -15,6 +17,7 @@ from scalepert import (
     scalepert_cell,
     score_programs,
 )
+from scalepert.cell import displacement_vectors, program_shifts
 
 
 @pytest.fixture(scope="session")
@@ -56,18 +59,28 @@ def _make_toy_adata(n_per_type=120, seed=7):
     return adata
 
 
-def test_programs_complete():
+def test_programs_match_manuscript_sizes():
     assert len(PROGRAMS) == 4
-    for name, genes in PROGRAMS.items():
-        assert len(genes) >= 5
-    assert set(resolve_gene(g, list(PROGRAMS["DDRRepair"])) for g in ["H2AFX", "PARP1"]) != {None}
+    assert [len(PROGRAMS[n]) for n in PROGRAM_NAMES] == [21, 36, 54, 8]
+    assert len(LR_PAIRS) == 18
+    assert ("HMGB1", "AGER") in LR_PAIRS
+    assert ("HMGB1", "RAGE") not in LR_PAIRS
+
+
+def test_alias_resolution():
+    var_names = ["TMEM173", "H2AX"]
+    assert resolve_gene("STING1", var_names) == "TMEM173"
+    assert resolve_gene("H2AFX", var_names) == "H2AX"
+    assert resolve_gene("ABCGene", var_names) is None
 
 
 def test_example_dataset_loads(example_adata):
     assert example_adata.n_obs > 500
     assert "cell_type" in example_adata.obs.columns
-    for p in ["IFI16", "TLR2", "HIF1A"]:
-        assert p in example_adata.var_names
+    for t in ["IFI16", "TLR2", "HIF1A"]:
+        assert t in example_adata.var_names
+    for p in PROGRAM_NAMES:
+        assert p in example_adata.obs.columns
 
 
 def test_prepare_adata_runs(toy_adata):
@@ -77,28 +90,24 @@ def test_prepare_adata_runs(toy_adata):
     assert prepared.raw is not None
 
 
-def test_displacement_direction_and_eligibility(example_adata):
+def test_displacement_eligibility_and_shapes(example_adata):
     prepared = prepare_adata(example_adata.copy(), min_genes=50)
     sub = prepared[prepared.obs["cell_type"] == "PT"].copy()
-    from scalepert.cell import displacement_vectors
-
     r = displacement_vectors(sub, "IFI16", "PT", k=15)
     if r is None:
         pytest.skip("target not eligible in this population")
     moved = np.linalg.norm(r["shift_vectors"], axis=1) > 0
     assert moved.sum() == r["n_eligible"]
-    expr = r["expression"]
-    low_neighbors_exist = (expr[:, None].ravel() < expr.ravel()[:, None]).any(axis=1)[expr.argsort().argsort()]
     assert r["pca_after"].shape == r["pca_before"].shape
     assert np.isfinite(r["pca_after"]).all()
+    expr = r["expression"]
     for i in np.where(moved)[0][:10]:
         nb = r["shift_vectors"][i]
         assert nb @ nb > 0
+    assert (expr >= 0).all()
 
 
-def test_program_shifts_sign_convention(example_adata):
-    from scalepert.cell import displacement_vectors, program_shifts
-
+def test_program_shifts_finite(example_adata):
     prepared = score_programs(prepare_adata(example_adata.copy(), min_genes=50))
     sub = prepared[prepared.obs["cell_type"] == "PT"].copy()
     r = displacement_vectors(sub, "HIF1A", "PT", k=15)
@@ -109,6 +118,36 @@ def test_program_shifts_sign_convention(example_adata):
         pytest.skip("insufficient displaced cells")
     for val in shifts.values():
         assert np.isfinite(val)
+
+
+def test_combo_averages_displacements_before_reconstruction(example_adata):
+    sub = example_adata.copy()
+    pair = ("IFI16", "AIM2")
+    single_results = [
+        displacement_vectors(sub, g, "IMM", k=20, scale=0.5) for g in pair
+    ]
+    combo_res = scalepert_cell(
+        sub,
+        targets=[pair[0]],
+        combos=[pair],
+        cell_type_key="cell_type",
+        k=20,
+        progress=False,
+    )
+    combo_row = combo_res.table[
+        (combo_res.table["target"] == "+".join(pair))
+        & (combo_res.table["cell_type"] == "IMM")
+    ]
+    if any(r is None for r in single_results) or len(combo_row) == 0:
+        pytest.skip("combo not evaluable in this population")
+    from scalepert.cell import _combine_displacements
+
+    combined = _combine_displacements(single_results)
+    expected = (single_results[0]["shift_vectors"] + single_results[1]["shift_vectors"]) / 2
+    assert np.allclose(combined["shift_vectors"], expected)
+    assert np.allclose(
+        combined["pca_after"], combined["pca_before"] + combined["shift_vectors"]
+    )
 
 
 def test_scalepert_cell_full_table(example_adata):
@@ -127,6 +166,21 @@ def test_scalepert_cell_full_table(example_adata):
     assert list(ranking["rank"]) == [1, 2, 3]
 
 
+def test_manuscript_ranking_reproduced_on_example_atlas(example_adata):
+    res = scalepert_cell(
+        example_adata,
+        targets=list(DEFAULT_TARGETS),
+        cell_type_key="cell_type",
+        k=30,
+        progress=False,
+    )
+    ranking = res.ranking().set_index("target")["rank"]
+    p4 = {"AIM2", "IFI16", "PYCARD"}
+    top3 = set(ranking.sort_values().index[:3])
+    assert top3 == p4
+    assert ranking["IFI16"] == 1
+
+
 def test_communication_graph_shape_and_nonnegativity(example_adata):
     comm = build_communication_graph(example_adata, "cell_type")
     cts = sorted(example_adata.obs["cell_type"].unique())
@@ -134,7 +188,7 @@ def test_communication_graph_shape_and_nonnegativity(example_adata):
     assert (comm.values >= 0).all()
 
 
-def test_tissue_propagation_matches_direct_signal(example_adata):
+def test_tissue_propagation_preserves_direct_signal(example_adata):
     res = scalepert_cell(
         example_adata,
         targets=["IFI16", "TLR2"],
@@ -157,6 +211,28 @@ def test_tissue_propagation_matches_direct_signal(example_adata):
     assert (out.summary["suppression_score"] >= 0).all()
 
 
+def test_tissue_suppression_uses_per_population_negatives():
+    from scalepert.tissue import propagate_tissue
+
+    class FakeResult:
+        table = pd.DataFrame(
+            {
+                "target": ["G1"] * 2,
+                "type": ["single"] * 2,
+                "cell_type": ["A", "B"],
+                "P1_W1": [-4.0, 1.0],
+                "P2_W1": [-1.0, -2.0],
+            }
+        )
+
+    comm = pd.DataFrame([[1.0, 0.0], [0.0, 1.0]], index=["A", "B"], columns=["A", "B"])
+    out = propagate_tissue(FakeResult(), comm, beta=0.3)
+    row = out.summary.set_index("target").loc["G1"]
+    per_ct = out.per_population[out.per_population["target"] == "G1"]["suppression_score"]
+    assert abs(row["suppression_score"] - per_ct.sum()) < 1e-9
+    assert row["suppression_score"] > 0
+
+
 def test_pipeline_end_to_end_with_export(tmp_path):
     pipe = ScalePertPipeline(k=20).fit(load_example_data(), targets=["IFI16", "HIF1A"])
     cr = pipe.cell_ranking()
@@ -169,13 +245,20 @@ def test_pipeline_end_to_end_with_export(tmp_path):
         "_cell_ranking.csv",
         "_communication_graph.csv",
         "_tissue_summary.csv",
+        "_tissue_per_population.csv",
     ]:
         assert (tmp_path / f"out{suffix}").exists()
 
 
-def test_pipeline_score_existing_mode():
-    pipe = ScalePertPipeline(k=20).fit(load_example_data(), targets=["IFI16"], score_existing=True)
-    assert len(pipe.cell_result_.table) > 0
+def test_pipeline_summary_table_layers_independent():
+    pipe = ScalePertPipeline(k=20).fit(load_example_data(), targets=["IFI16", "TLR2"])
+    st = pipe.summary_table()
+    layers = set(st["layer"])
+    assert layers == {"ScalePert-Cell", "ScalePert-Tissue"}
+    cell_rows = st[st["layer"] == "ScalePert-Cell"]
+    tissue_rows = st[st["layer"] == "ScalePert-Tissue"]
+    assert cell_rows["mean_score"].notna().all()
+    assert tissue_rows["suppression_score"].notna().all()
 
 
 def test_sensitivity_ranks_stable():

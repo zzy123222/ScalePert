@@ -2,14 +2,35 @@ import numpy as np
 import pandas as pd
 from scipy.linalg import expm
 
-from .programs import LR_PAIRS
+from .programs import LR_PAIRS, GENE_ALIASES
 
 
-def build_communication_graph(adata, cell_type_key="cell_type", lr_pairs=None, use_layer=None):
-    if lr_pairs is None:
-        lr_pairs = LR_PAIRS
-    var_names = set(map(str, adata.var_names))
-    pairs = [(l, r) for l, r in lr_pairs if l in var_names and r in var_names]
+def _resolve_lr_pairs(var_names):
+    names = set(map(str, var_names))
+
+    def present(gene):
+        if gene in names:
+            return gene
+        alias = GENE_ALIASES.get(gene)
+        if alias and alias in names:
+            return alias
+        return None
+
+    pairs = []
+    for lig, rec in LR_PAIRS:
+        l = present(lig)
+        r = present(rec)
+        if l and r:
+            pairs.append((l, r))
+    return pairs
+
+
+def build_communication_graph(adata, cell_type_key="cell_type", lr_pairs=None):
+    if lr_pairs is not None:
+        var_names = set(map(str, adata.var_names))
+        pairs = [(l, r) for l, r in lr_pairs if l in var_names and r in var_names]
+    else:
+        pairs = _resolve_lr_pairs(adata.var_names)
     if not pairs:
         raise ValueError(
             "none of the ligand-receptor pairs are present in the matrix; "
@@ -18,10 +39,11 @@ def build_communication_graph(adata, cell_type_key="cell_type", lr_pairs=None, u
     X = adata.X
     if hasattr(X, "toarray"):
         X = X.toarray()
+    X = np.asarray(X)
     cell_types = sorted(adata.obs[cell_type_key].astype(str).unique())
     g2i = {g: i for i, g in enumerate(adata.var_names)}
     labels = adata.obs[cell_type_key].astype(str).values
-    expr = {g: X[:, g2i[g]].astype(float) for l, r in pairs for g in (l, r)}
+    expr = {g: X[:, g2i[g]].astype(float) for pair in pairs for g in pair}
     W = np.zeros((len(cell_types), len(cell_types)))
     for i, sender in enumerate(cell_types):
         ms = labels == sender
@@ -31,8 +53,7 @@ def build_communication_graph(adata, cell_type_key="cell_type", lr_pairs=None, u
             for lig, rec in pairs:
                 total += expr[lig][ms].mean() * expr[rec][mr].mean()
             W[i, j] = total
-    comm = pd.DataFrame(W, index=cell_types, columns=cell_types)
-    return comm
+    return pd.DataFrame(W, index=cell_types, columns=cell_types)
 
 
 def propagate_tissue(cell_result, comm, beta=0.3):
@@ -47,38 +68,41 @@ def propagate_tissue(cell_result, comm, beta=0.3):
     L = np.diag(W.sum(axis=1)) - W
     operator = expm(-beta * L)
     rows = []
+    detail_rows = []
     for label, sub in table.groupby("target"):
         ptype = sub["type"].iloc[0]
-        vec = {p: [] for p in programs}
-        for ct in cts:
-            hit = sub[sub["cell_type"] == ct]
-            for p in programs:
-                col = f"{p}_W1"
-                vec[p].append(float(hit[col].values[0]) if len(hit) and col in hit.columns else 0.0)
-        row = {"target": label, "type": ptype}
-        propagated_means = {}
-        propagated_by_ct = {}
+        vec_by_program = {}
         for p in programs:
-            v = np.asarray(vec[p])
-            prop = operator @ v
-            propagated_means[p] = float(prop.mean())
-            for i, ct in enumerate(cts):
-                propagated_by_ct[(ct, p)] = float(prop[i])
+            col = f"{p}_W1"
+            v = []
+            for ct in cts:
+                hit = sub[sub["cell_type"] == ct]
+                v.append(float(hit[col].values[0]) if len(hit) else 0.0)
+            vec_by_program[p] = np.asarray(v)
+        suppression_per_ct = np.zeros(len(cts))
+        prop_means = {}
+        prop_by_program = {}
         for p in programs:
-            row[f"tissue_{p}"] = propagated_means[p]
-        neg = [v for v in propagated_means.values() if v < 0]
-        row["suppression_score"] = float(sum(-v for v in neg))
-        row["propagated_signed_mean"] = float(np.mean(list(propagated_means.values())))
+            prop = operator @ vec_by_program[p]
+            prop_by_program[p] = prop
+            prop_means[p] = float(prop.mean())
+            suppression_per_ct += np.maximum(-prop, 0.0)
+        row = {
+            "target": label,
+            "type": ptype,
+            "suppression_score": float(suppression_per_ct.sum()),
+            "propagated_signed_mean": float(np.mean(list(prop_means.values()))),
+        }
+        for p in programs:
+            row[f"tissue_{p}"] = prop_means[p]
         rows.append(row)
-    out = pd.DataFrame(rows)
-    detail_rows = []
-    for _, r in out.iterrows():
-        for ct in cts:
-            d = {"target": r["target"], "cell_type": ct}
+        for i, ct in enumerate(cts):
+            d = {"target": label, "cell_type": ct}
             for p in programs:
-                d[f"{p}_W1"] = propagated_by_ct.get((ct, p), np.nan)
+                d[f"{p}_W1"] = float(prop_by_program[p][i])
+            d["suppression_score"] = float(suppression_per_ct[i])
             detail_rows.append(d)
-    return TissueResult(out, pd.DataFrame(detail_rows), beta)
+    return TissueResult(pd.DataFrame(rows), pd.DataFrame(detail_rows), beta)
 
 
 class TissueResult:

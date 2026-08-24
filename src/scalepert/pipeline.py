@@ -110,25 +110,31 @@ class ScalePertPipeline:
             self.tissue_result_ = None
         return self
 
-    def cell_ranking(self):
-        return self.cell_result_.ranking()
+    def cell_ranking(self, types=("single",)):
+        return self.cell_result_.ranking(types=types)
 
-    def tissue_ranking(self):
+    def tissue_ranking(self, types=("single",)):
         if self.tissue_result_ is None:
             raise RuntimeError("communication graph unavailable; tissue ranking not computed")
-        return self.tissue_result_.ranking()
+        single = self.tissue_result_.summary[self.tissue_result_.summary["type"].isin(types)]
+        return (
+            single.sort_values("suppression_score", ascending=False)[
+                ["target", "suppression_score"]
+            ]
+            .reset_index(drop=True)
+            .rename(columns={"suppression_score": "score"})
+        )
 
     def summary_table(self):
-        rows = [self.cell_result_.tissue_summary()]
-        rows[0].insert(0, "layer", "ScalePert-Cell")
-        out = rows[0]
+        cell = self.cell_result_.population_summary()
+        cell = cell.assign(layer="ScalePert-Cell", score_column="mean_signed_W1")
+        frames = [cell]
         if self.tissue_result_ is not None:
             t = self.tissue_result_.summary[self.tissue_result_.summary["type"] == "single"][
                 ["target", "suppression_score"]
             ].copy()
-            t.insert(0, "layer", "ScalePert-Tissue")
-            out = pd.concat([out, t], ignore_index=True)
-        return out
+            frames.append(t.assign(layer="ScalePert-Tissue", score_column="suppression_score"))
+        return pd.concat(frames, ignore_index=True)
 
     def export(self, path_prefix):
         base = str(path_prefix)

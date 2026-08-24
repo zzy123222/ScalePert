@@ -32,7 +32,6 @@ GENE_ALIASES = {
     "TMEM173": "STING1",
     "H2AFX": "H2AX",
     "CGAS": "MB21D1",
-    "RAGE": "AGER",
 }
 
 LR_PAIRS = [
