@@ -155,7 +155,7 @@ The manuscript's quantitative results were produced with the research codebase u
 
 If you use ScalePert, please cite the manuscript:
 
-> ScalePert: interpretable local-manifold virtual perturbation for target prioritization from observational single-cell transcriptomes.
+> ScalePert enables interpretable local manifold virtual perturbation and target prioritization from observational single cell transcriptomes.
 
 ## License
 
