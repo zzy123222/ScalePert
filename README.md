@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/zzy123222/ScalePert/actions/workflows/tests.yml/badge.svg)](https://github.com/zzy123222/ScalePert/actions/workflows/tests.yml)
 
-**ScalePert: interpretable local-manifold virtual perturbation for target prioritization from observational single-cell transcriptomes**
+**ScalePert enables interpretable local-manifold target prioritization from observational single-cell transcriptomes**
 
 ScalePert is an interpretable, multiscale framework that uses naturally occurring transcriptional heterogeneity in observational single-cell (or single-nucleus) RNA-seq data to infer target-reduction-associated cellular-state transitions and prioritize candidate targets — without requiring perturbation-trained models, inferred regulatory networks, or additional molecular modalities.
 
@@ -84,10 +84,10 @@ The two layers use **different score definitions and directions** and must be ra
 
 | Layer | Quantity | Direction | Priority rule |
 |---|---|---|---|
-| ScalePert-Cell | signed mean Wasserstein-1 shift over the four programs | negative = disease-program suppression | more negative = higher priority |
+| ScalePert-Cell | signed mean Wasserstein-1 shift over the four programs | negative = lower disease-program scores | more negative = higher priority |
 | ScalePert-Tissue | propagated program-suppression score (total magnitude of downward-shifted programs per population, summed over populations) | non-negative by construction | larger = higher priority |
 
-In disease-oriented applications where the predefined programs represent pathological processes, more-negative ScalePert-Cell shifts indicate stronger predicted suppression of disease-associated programs and therefore greater reversal priority.
+In disease-oriented applications where the predefined programs represent pathological processes, more-negative ScalePert-Cell shifts indicate a stronger association with lower disease-associated program scores and therefore greater reversal priority.
 
 ## Method summary
 
@@ -101,7 +101,7 @@ Given a processed gene-by-cell matrix \(X\), population labels \(c(i)\), nominat
    \(\Delta_i = s \cdot \frac{1}{|\mathcal{N}_i^-|} \sum_{j \in \mathcal{N}_i^-} (x_j - x_i)\),
    with scaling factor \(s = 1.0\) (\(s = 1/q\) per target within a q-target combination). Cells without eligible lower-expression neighbors remain at their original coordinates.
 4. **Additive combinations** — for a set G of q targets, individual displacement vectors are averaged **before** functional reconstruction.
-5. **Functional reconstruction** — program scores at virtual coordinates are reconstructed as the unweighted mean of nearest observed cells in PCA space; cells displaced above the within-analysis 25th percentile are retained for distribution comparison.
+5. **Functional reconstruction** — program scores at displaced coordinates are reconstructed as the unweighted mean of nearest observed cells in PCA space; cells displaced above the within-analysis 25th percentile are retained for distribution comparison.
 6. **Signed Wasserstein-1 shift** — for program *m*:
    \(\mathrm{Shift}_m = \mathrm{sign}\!\left(\bar{Q}_m - \bar{P}_m\right) \cdot W_1(P_m, Q_m)\).
    Negative values denote suppression of disease-associated programs. ScalePert-Cell summarizes the four program-specific shifts by their arithmetic mean.
@@ -133,7 +133,7 @@ src/scalepert/data_store/ # packaged example atlas (.h5ad)
 
 ## Using ScalePert on your own data
 
-Provide an `AnnData` with raw counts (or already processed values) in `.X`, a categorical population annotation in `.obs`, and your nominated target genes present in `.var_names`. Functional programs should represent biological processes relevant to your disease context; ScalePert ranks targets by how strongly their virtual reduction suppresses those programs.
+Provide an `AnnData` with raw counts (or already processed values) in `.X`, a categorical population annotation in `.obs`, and your nominated target genes present in `.var_names`. Functional programs should represent biological processes relevant to your disease context; ScalePert ranks targets by how strongly their target-conditioned displacement is associated with lower scores of those programs.
 
 ```python
 sens = scalepert.sensitivity(pipeline.adata_, targets=pipeline.targets_)
