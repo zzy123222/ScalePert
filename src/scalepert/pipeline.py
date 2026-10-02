@@ -88,7 +88,12 @@ class ScalePertPipeline:
             self.programs_ = resolve_programs(work.var_names)
             work = score_programs(work, self.programs_)
         else:
-            work = prepare_adata(adata, n_top_genes=self.n_top_genes, n_comps=self.n_comps)
+            work = prepare_adata(
+                adata,
+                n_top_genes=self.n_top_genes,
+                n_comps=self.n_comps,
+                cell_type_key=self.cell_type_key,
+            )
             self.programs_ = resolve_programs(work.var_names)
             work = score_programs(work, self.programs_)
         self.adata_ = work

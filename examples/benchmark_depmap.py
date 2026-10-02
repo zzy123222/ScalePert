@@ -15,7 +15,7 @@ def load_inputs(adata_path, chronos_path):
 
 
 def run_scalepert_ranking(adata, targets, cell_type_key="cell_type"):
-    prepared = prepare_adata(adata)
+    prepared = prepare_adata(adata, cell_type_key=cell_type_key)
     scored = score_programs(prepared)
     res = scalepert_cell(scored, targets=targets, cell_type_key=cell_type_key)
     ranking = res.ranking()

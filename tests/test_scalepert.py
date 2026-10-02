@@ -280,3 +280,27 @@ def test_missing_celltype_key_raises(toy_adata):
     toy.obs = toy.obs.rename(columns={"cell_type": "population"})
     with pytest.raises(KeyError):
         prepare_adata(toy)
+
+
+def test_pipeline_honours_custom_cell_type_key(example_adata):
+    """Regression: fit() must forward cell_type_key to prepare_adata.
+
+    The pipeline previously fell back to the default "cell_type" column, so any
+    custom annotation column raised KeyError even though cell_type_key was a
+    documented constructor argument. Renaming the column must not change results.
+    """
+    renamed = example_adata.copy()
+    renamed.obs["population"] = renamed.obs["cell_type"].astype(str)
+    renamed.obs = renamed.obs.drop(columns=["cell_type"])
+
+    default = ScalePertPipeline(k=20).fit(example_adata, targets=["IFI16", "TLR2"])
+    custom = ScalePertPipeline(cell_type_key="population", k=20).fit(
+        renamed, targets=["IFI16", "TLR2"]
+    )
+
+    assert len(custom.cell_ranking()) == 2
+    pd.testing.assert_series_equal(
+        default.cell_ranking().set_index("target")["mean_signed_W1"],
+        custom.cell_ranking().set_index("target")["mean_signed_W1"],
+        check_names=False,
+    )
